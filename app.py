@@ -1,21 +1,32 @@
 from typing import Any, Iterator
 import csv
 import random
+from copy import deepcopy
 
 import torch
 import torch.nn as nn
+import torch.cuda as cuda
 import torch.utils.data as torchdata
-import torch.utils.tensorboard as tensorboard
 import torch.optim as optim
 
 import transforms.image_transforms as it
 import data.retrieval as rt
+import callbacks as cb
 from functional.core import pipe
 
 
-# TODO: need to add functionality to add move feature maps out of VRAM - https://medium.com/syncedreview/how-to-train-a-very-large-and-deep-model-on-one-gpu-7b7edfe2d072
+# TODO: need to add functionality to add move feature maps out of VRAM - https://medium.com/syncedreview/how-to-train-a-very-large-and-deep-model-on-one-gpu-7b7edfe2d072 https://arxiv.org/pdf/1602.08124.pdf https://medium.com/tensorflow/fitting-larger-networks-into-memory-583e3c758ff9
+# TODO: these look most promising: https://www.sicara.ai/blog/2019-28-10-deep-learning-memory-usage-and-pytorch-optimization-tricks https://pytorch.org/docs/stable/checkpoint.html
 metadata_path = 'D:/HDD Data/CMAopenaccess/data.csv'
 data_dir = 'D:/HDD Data/CMAopenaccess/images/'
+# TODO: see if there's anything we can do to avoid passing device everywhere without making it global/unconfigurable
+
+
+class Trainer:
+
+    def __init__(self, optimizer, loss):
+        self.optimizer = optimizer
+        self.loss = loss
 
 
 def load_metadata(path, cols, class_cols=tuple(), valid_only=True):
@@ -51,7 +62,7 @@ def custom_collate(batch):
     return [inputs, targets]
 
 
-def get_target(get_label):
+def get_target(get_label, class_to_index):
 
     def _get(metadatum):
         label = get_label(metadatum)
@@ -116,45 +127,109 @@ def define_network(num_classes):
     )
 
 
-# TODO: put most of these params in a compile closure?
-def train(net, loader, loss_func, optimizer, device, epochs, print_interval=16):
-    # TODO: abstract out tensorboard writer
-    tensorboard_writer = tensorboard.SummaryWriter()
+# TODO: rename mode?
+# get whether this module and each submodule recursively is in train or evaluation mode
+def get_mode_tree(module):
+    def _get_mode(module, mode):
+        mode.append([module.training])
+        for submodule in module.children():
+            mode[-1].append(_get_mode(submodule, mode))
+        return mode
+    return _get_mode(module, [])
+
+
+# set the train or evaluation state of this module and each submodule recursively
+def set_mode_tree(module, mode):
+    module.train(mode[0])
+    for s, submodule in enumerate(module.children()):
+        set_mode_tree(submodule, mode[s])
+
+
+# runs the network once without modifying the loader's state as a test/for profiling
+def dry_run(net, loader, trainer, device=None):
+    def _apply():
+        pass
+        prev_mode = get_mode_tree(net)
+        dryrun_loader = deepcopy(loader)
+        inputs, gtruth = iter(loader).next()
+        train_step(net, trainer, device=device)(inputs, gtruth)
+        set_mode_tree(net, prev_mode)
+    return _apply
+
+
+# NOTE: only works on CUDA devices
+def profile_cuda_memory_by_layer(net, run_func, device=None):
+    profiler_hooks = []
+
+    def _profile_layer(net, input, output):
+        print(type(net).__name__, cuda.memory_allocated(device), cuda.memory_cached(device))
+
+    def _add_profiler_hook(net):
+        profiler_hooks.append(net.register_forward_hook(_profile_layer))
+
+    print("CUDA MEMORY PROFILE")
+
+    cuda.empty_cache()
+    cuda.reset_max_memory_allocated(device)
+    cuda.reset_max_memory_cached(device)
+    print("CUDA device initial allocated memory: ", cuda.memory_allocated(device))
+    print("CUDA device initial cached memory: ", cuda.memory_cached(device))
+
+    print('Name Allocated Cached')
+    net.apply(_add_profiler_hook)
+
+    # train step
+    run_func()
+
+    print("CUDA device max allocated memory: ", cuda.max_memory_allocated(device))
+    print("CUDA device max cached memory: ", cuda.max_memory_cached(device))
+
+    for h in profiler_hooks:
+        h.remove()
+
+    cuda.empty_cache()
+    cuda.reset_max_memory_allocated(device)
+    cuda.reset_max_memory_cached(device)
+
+
+def train_step(net, trainer, device=None):
+    def _apply(inputs, gtruth):
+        inputs, gtruth = inputs.to(device, non_blocking=True), gtruth.to(device, non_blocking=True)
+        trainer.optimizer.zero_grad()  # reset the gradients to zero
+
+        # run the inputs through the network and compute loss relative to gtruth
+        outputs = net(inputs)
+        loss = trainer.loss(outputs, gtruth)
+        loss.backward()
+        trainer.optimizer.step()
+        return loss
+    return _apply
+
+
+def train(net, loader, trainer, callbacks=None, device=None, epochs=1):
+    if callbacks is None:
+        callbacks = []
 
     steps_per_epoch = len(loader)
+    callbacks = [callback(steps_per_epoch) for callback in callbacks]
+    take_step = train_step(net, trainer, device=device)
+
     for epoch in range(epochs):
         print('----BEGIN EPOCH ', epoch, '----')
-        interval_avg_loss = 0.0
         for step, (inputs, gtruth) in enumerate(loader):
-
-            inputs, gtruth = inputs.to(device, non_blocking=True), gtruth.to(device, non_blocking=True)
-            optimizer.zero_grad() # reset the gradients to zero
-
-            # run the inputs through the network and compute loss relative to gtruth
-            outputs = net(inputs)
-            loss = loss_func(outputs, gtruth)
-            loss.backward()
-            optimizer.step()
-
-            # TODO: as above, abstract out tensorboard
-            tensorboard_writer.add_scalar('loss', loss, epoch * steps_per_epoch + step)
-
-            # print statistics
-            interval_avg_loss += loss.item()
-            if step % print_interval == 0:
-                print('EPOCH ', epoch, ' STEP ', step, '/', steps_per_epoch, interval_avg_loss / print_interval)
-                interval_avg_loss = 0
+            loss = take_step(inputs, gtruth)
+            for callback in callbacks:
+                callback["on_step"](loss, step, epoch)
     print('TRAINING COMPLETE!')
 
 
-# TODO: abstract out with train?
-# TODO: also abstract out to be able to inject metrics
-def test(net, loader, device):
+# TODO: abstract out to be able to inject metrics
+def test(net, loader, device=None):
     print('TESTING')
     correct, total = 0, 0
     with torch.no_grad():
         for (inputs, gtruth) in loader:
-            inputs, gtruth = inputs.to(device), gtruth.to(device)
+            inputs, gtruth = inputs.to(device, non_blocking=True), gtruth.to(device, non_blocking=True)
             outputs = net(inputs)
             _, predicted = torch.max(outputs.data, 1)
             total += gtruth.size(0)
@@ -166,31 +241,27 @@ def test(net, loader, device):
 # TODO: also add validation set capabilities
 # TODO: should be easy to make a func that accepts a dataset or loader and splits it in two to avoid duplicating
 # TODO: preprocessing code
-if __name__ == '__main__':
-    COL_ID = 0
-    COL_CREATION_DATE = 9
-    COL_TYPE = 18
-    COL_IMG_WEB = -4  # lower resolution makes for smaller dataset/faster training
-
+def run():
     metadata, len_metadata, metadata_headers, class_to_index, index_to_class, num_classes = load_metadata(
         metadata_path,
         cols=(COL_ID, COL_TYPE, COL_IMG_WEB),
         class_cols=(COL_TYPE,)
     )
-    len_metadata = 31149 # TODO: either the dataset is corrupted/in a different format after this point or the endpoint was down last I tried
+    len_metadata = 31149  # TODO: either the dataset is corrupted/in a different format after this point or the endpoint was down last I tried
     metadata = metadata[:len_metadata]
 
+    # shuffle at beginning to get random sampling for train and test datasets
     random.shuffle(metadata)
 
     print(class_to_index)
     print(index_to_class)
-    # TODO: shuffle metadata
+
     dataset = PreparedDataset(
         metadata,
         len_metadata,
         prepare_example(
             pipe(rt.get_from_file_or_url(data_dir), it.random_fit_to((256, 256)), it.to_tensor()),
-            get_target(rt.get_label)
+            get_target(rt.get_label, class_to_index)
         )
     )
 
@@ -199,7 +270,7 @@ if __name__ == '__main__':
         256,
         prepare_example(
             pipe(rt.get_from_file_or_url(data_dir), it.random_fit_to((256, 256)), it.to_tensor()),
-            get_target(rt.get_label)
+            get_target(rt.get_label, class_to_index)
         )
     )
 
@@ -210,7 +281,7 @@ if __name__ == '__main__':
     loader = torchdata.DataLoader(
         dataset,
         batch_size=16,
-        shuffle=False,
+        shuffle=True,  # shuffle every epoch so learning is order-independent
         num_workers=0,
         pin_memory=True,
     )
@@ -218,7 +289,7 @@ if __name__ == '__main__':
     test_loader = torchdata.DataLoader(
         test_dataset,
         batch_size=16,
-        shuffle=False,
+        shuffle=True,  # shuffle every epoch so learning is order-independent
         num_workers=0,
         pin_memory=True,
     )
@@ -226,7 +297,9 @@ if __name__ == '__main__':
     dataiter = iter(loader)
     demo_batch = dataiter.next()
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    is_cuda = cuda.is_available()
+
+    device = torch.device("cuda:0" if is_cuda else "cpu")
     print("using ", device)
 
     net = define_network(num_classes)
@@ -235,10 +308,28 @@ if __name__ == '__main__':
     loss_func = nn.CrossEntropyLoss()
     optimizer = optim.Adam(net.parameters())
 
+    trainer = Trainer(optimizer, loss_func)
+
+    if is_cuda:
+        profile_cuda_memory_by_layer(net, dry_run(net, loader, trainer, device=device), device=device)
+
     accuracy = test(net, test_loader, device)
     print("pre-training accuracy: ", accuracy)
 
-    train(net, loader, loss_func, optimizer, device, epochs=3)
+    callbacks = [
+        cb.tensorboard_record_loss(),
+        cb.calc_interval_avg_loss(print_interval=16)
+    ]
+
+    train(net, loader, trainer, callbacks, device, 3)
 
     accuracy = test(net, test_loader, device)
     print("post-training accuracy: ", accuracy)
+
+
+if __name__ == '__main__':
+    COL_ID = 0
+    COL_CREATION_DATE = 9
+    COL_TYPE = 18
+    COL_IMG_WEB = -4  # lower resolution makes for smaller dataset/faster training
+    run()
