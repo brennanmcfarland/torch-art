@@ -1,6 +1,7 @@
 from typing import Any, Iterator
 import csv
 import random
+import functools
 from copy import deepcopy
 
 import torch
@@ -8,6 +9,7 @@ import torch.nn as nn
 import torch.cuda as cuda
 import torch.optim as optim
 
+import shape_inference as sh
 import transforms.image_transforms as it
 import data.retrieval as rt
 import data.handling as dt
@@ -83,39 +85,51 @@ def prepare_example(get_image, get_label):
     return _prepare
 
 
-# TODO: generalize
-def define_network(num_classes):
-    # TODO: shape inference (probably make it functional, maybe a subclass that calls it?)
-    return nn.Sequential(
-        nn.Conv2d(3, 16, 3),
+def define_layers(num_classes):
+    return [
+        sh.Input(3),  # TODO: make this always match loader?
+        sh.PartialLayer(nn.Conv2d, -1, 16, 3), # TODO: it would be nice to get rid of these -1s, just prepend it in inference implementation (but get to work first)
         nn.ReLU(),
-        nn.Conv2d(16, 32, 4),
+        sh.PartialLayer(nn.Conv2d, -1, 32, 4),
         nn.ReLU(),
-        nn.Conv2d(32, 64, 5),
-        nn.ReLU(),
-        nn.MaxPool2d(2),
-        nn.Conv2d(64, 64, 6),
-        nn.ReLU(),
-        nn.Conv2d(64, 64, 5),
+        sh.PartialLayer(nn.Conv2d, -1, 64, 5),
         nn.ReLU(),
         nn.MaxPool2d(2),
-        nn.Conv2d(64, 128, 4),
+        sh.PartialLayer(nn.Conv2d, -1, 64, 6),
         nn.ReLU(),
-        nn.Conv2d(128, 64, 4),
+        sh.PartialLayer(nn.Conv2d, -1, 64, 5),
         nn.ReLU(),
-        nn.Conv2d(64, 64, 3),
+        nn.MaxPool2d(2),
+        sh.PartialLayer(nn.Conv2d, -1, 128, 4),
         nn.ReLU(),
-        nn.Flatten(),
-        # TODO: need to figure out input size dynamically
-        nn.Linear(153664, 1024),
+        sh.PartialLayer(nn.Conv2d, -1, 64, 4),
         nn.ReLU(),
-        nn.Linear(1024, 1024),
+        sh.PartialLayer(nn.Conv2d, -1, 64, 3),
         nn.ReLU(),
-        nn.Linear(1024, 512),
+        sh.PartialLayer(nn.Flatten, out_shape=-1),
+        sh.PartialLayer(nn.Linear, -1, 1024),
         nn.ReLU(),
-        nn.Linear(512, num_classes),
+        sh.PartialLayer(nn.Linear, -1, 1024),
+        nn.ReLU(),
+        sh.PartialLayer(nn.Linear, -1, 512),
+        nn.ReLU(),
+        sh.PartialLayer(nn.Linear, -1, num_classes),
         nn.Softmax()
+    ]
+
+
+# TODO: generalize
+# TODO: device? keep in mind both data and network will need to be on same device
+def create_network(layers, loader):
+    return nn.Sequential(
+        *sh.infer_shapes_on_data(layers, loader=loader)
     )
+
+
+def get_output_shape(layer, input_size):
+    dummy_input = torch.zeros(input_size)
+    dummy_output = layer(dummy_input)
+    return dummy_output.size
 
 
 # get whether this module and each submodule recursively is in train or evaluation mode
@@ -136,13 +150,13 @@ def set_train_mode_tree(module, mode):
 
 
 # runs the network once without modifying the loader's state as a test/for profiling
-def dry_run(net, loader, trainer, device=None):
+def dry_run(net, loader, trainer, train_step_func, device=None):
     def _apply():
-        pass
         prev_mode = get_train_mode_tree(net)
         inputs, gtruth = iter(loader).next()
-        train_step(net, trainer, device=device)(inputs, gtruth)
+        result = train_step_func(net, trainer, device=device)(inputs, gtruth)
         set_train_mode_tree(net, prev_mode)
+        return result
     return _apply
 
 
@@ -263,7 +277,8 @@ def run():
     device = torch.device("cuda:0" if is_cuda else "cpu")
     print("using ", device)
 
-    net = define_network(num_classes)
+    layers = define_layers(num_classes)
+    net = create_network(layers, loader)
     net = net.to(device)
 
     loss_func = nn.CrossEntropyLoss()
@@ -274,7 +289,7 @@ def run():
     metrics = [mt.calc_category_accuracy()]
 
     if is_cuda:
-        profile_cuda_memory_by_layer(net, dry_run(net, loader, trainer, device=device), device=device)
+        profile_cuda_memory_by_layer(net, dry_run(net, loader, trainer, train_step, device=device), device=device)
         optimize_cuda_for_fixed_input_size()
 
     accuracy = test(net, test_loader, metrics, device)
