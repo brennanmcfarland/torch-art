@@ -37,3 +37,11 @@ class IntervalAvgLoss:
             )
             interval_avg_loss = 0
         return interval_avg_loss
+
+
+def validate(validation_func, net, loader, metrics=None, device=None):
+    def _bind(steps_per_epoch):
+        def on_epoch_end():
+            validation_func(net, loader, metrics, device)
+        return {"on_epoch_end": on_epoch_end}
+    return _bind

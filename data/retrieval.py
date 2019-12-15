@@ -5,21 +5,14 @@ from io import BytesIO
 
 
 # pull the image from the api endpoint and save it if we don't have it, else load it from disk
-def get_from_file_or_url(data_dir):
-    def _apply(metadatum):
-        # TODO: generalize indices?
-        img_path = data_dir + metadatum[0] + '.jpg'
-        img = from_file(img_path)
+def get_img_from_file_or_url(img_format='JPEG'):
+    def _apply(filepath, url):
+        img = from_file(filepath)
         if img is None:
-            img = from_url(metadatum[-1])
-            img.save(img_path, "JPEG")
+            img = from_url(url)
+            img.save(filepath, img_format)
         return img.convert('RGB')  # convert to rgb if not already (eg if grayscale)
     return _apply
-
-
-# TODO: fix this up too
-def get_label(metadatum):
-    return metadatum[1]
 
 
 def from_url(url):

@@ -1,4 +1,4 @@
-from core import pipe as core_pipe
+from functional.core import pipe as core_pipe
 
 
 # maybe monad bind operation
