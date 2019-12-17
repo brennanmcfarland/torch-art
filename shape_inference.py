@@ -15,84 +15,33 @@ class Input(nn.Module):
         return x
 
 
-class PartialLayer:
+# TODO: note or make it not just work with statically sized input, maybe not with input at all if possible in some cases
+class ShapeInferer:
+    def __init__(self, loader):
+        self.shape = None
+        self.loader = loader
 
-    def __init__(self, layer_func, *args, out_shape=None, **kwargs):
-        self.layer_func = layer_func
-        self.args = args
-        self.kwargs = kwargs
-        self.out_shape = None
-        if not out_shape:
-            self.out_shape = args[1]  # TODO: should this be 0?
+    def infer(self, layer, prev_layers):
+        self.shape = self._infer(layer, prev_layers[-1], prev_layers)
+        return self.shape
 
-    def __call__(self, *args, **kwargs):
-        self.layer_func(*args, **kwargs)
+    # TODO: generalize
+    def _infer(self, layer, prev_layer, prev_layers):
+        if type(prev_layer).__name__ is 'Input':
+            return prev_layer.size
+        elif type(prev_layer).__name__ is 'Conv2d' or type(prev_layer).__name__ is 'Linear':
+            return prev_layer.weight.size()[0]  # the out_features dim
+        elif type(prev_layer).__name__ is 'Flatten':
+            model = nn.Sequential(*prev_layers,
+                                  nn.Flatten())  # TODO: replace with layer and make sure params are passed
 
+            def _run(net, trainer, device):
+                def _r(inputs, gtruth):
+                    return model(inputs)
 
-# applies the shape argument
-def _apply_shape(layer_func, shape):
-    args = list(layer_func.args)
-    kwargs = layer_func.kwargs
-    if len(args) > 0:
-        args[0] = shape
-    return layer_func.layer_func(*args, **kwargs)
+                return _r
 
-# TODO: remove duplicate funcs if possible (want to still be able to run wo loader)
-
-# NOTE: since there is no way to know what is in nested submodules, those will have to handle their own shape inference
-# infer the input channels/features from the previous layer for partial layers
-# TODO: generalize for things like flatten? pass in loader and get rid of Input? or have option for both?
-# TODO: using the loader is the only way to get inference for dense/flatten, since it needs to know the size of the input
-def infer_shapes(layers):
-    def _infer(layers, current_shape):
-        if len(layers) == 0:
-            return []
-        new_layer = layers[0]
-        new_shape = current_shape
-        if type(new_layer) is PartialLayer:
-            new_shape = new_layer.out_shape
-            new_layer = _apply_shape(new_layer, current_shape)
-        if len(layers) == 1:
-            return [new_layer,]
-        new_layers = [new_layer]
-        new_layers.extend(_infer(layers[1:], new_shape))
-        return new_layers
-    assert type(layers[0]) is Input
-    return _infer(layers[1:], layers[0].size)
-
-
-# TODO: device?
-# TODO: rename to indicate the data needs to be of same dims each time
-def infer_shapes_on_data(layers, loader):
-    def _infer(layers, current_shape, partial_model):
-        if len(layers) == 0:
-            return []
-        new_layer = layers[0]
-        new_shape = current_shape
-        if type(new_layer) is PartialLayer:
-            new_shape = new_layer.out_shape
-            new_shape = _infer_shape(new_layer.layer_func, new_shape, partial_model, loader)
-            new_layer = _apply_shape(new_layer, current_shape)
-        if len(layers) == 1:
-            return [new_layer, ]
-        partial_model.append(new_layer)
-        new_layers = [new_layer]
-        new_layers.extend(_infer(layers[1:], new_shape, partial_model))
-        return new_layers
-    assert type(layers[0]) is Input
-    return _infer(layers[1:], layers[0].size, [])
-
-
-# TODO: device?
-def _infer_shape(layer, prev_output_shape, partial_model, loader):
-    if layer.__name__ is 'Flatten':
-        model = nn.Sequential(*partial_model, nn.Flatten())  # TODO: replace with layer and make sure params are passed
-
-        def _run(net, trainer, device):
-            def _r(inputs, gtruth):
-                return model(inputs)
-            return _r
-        output = dry_run(model, loader, None, _run)()
-        return output.size()[-1]
-    else:
-        return prev_output_shape
+            output = dry_run(model, self.loader, None, _run)()
+            return output.size()[-1]
+        else:
+            return self._infer(prev_layer, prev_layers[-2], prev_layers[:-1])

@@ -88,42 +88,43 @@ def prepare_example(get_image, get_label):
 def define_layers(num_classes):
     return [
         sh.Input(3),  # TODO: make this always match loader?
-        sh.PartialLayer(nn.Conv2d, -1, 16, 3), # TODO: it would be nice to get rid of these -1s, just prepend it in inference implementation (but get to work first)
-        nn.ReLU(),
-        sh.PartialLayer(nn.Conv2d, -1, 32, 4),
-        nn.ReLU(),
-        sh.PartialLayer(nn.Conv2d, -1, 64, 5),
-        nn.ReLU(),
-        nn.MaxPool2d(2),
-        sh.PartialLayer(nn.Conv2d, -1, 64, 6),
-        nn.ReLU(),
-        sh.PartialLayer(nn.Conv2d, -1, 64, 5),
-        nn.ReLU(),
-        nn.MaxPool2d(2),
-        sh.PartialLayer(nn.Conv2d, -1, 128, 4),
-        nn.ReLU(),
-        sh.PartialLayer(nn.Conv2d, -1, 64, 4),
-        nn.ReLU(),
-        sh.PartialLayer(nn.Conv2d, -1, 64, 3),
-        nn.ReLU(),
-        sh.PartialLayer(nn.Flatten, out_shape=-1),
-        sh.PartialLayer(nn.Linear, -1, 1024),
-        nn.ReLU(),
-        sh.PartialLayer(nn.Linear, -1, 1024),
-        nn.ReLU(),
-        sh.PartialLayer(nn.Linear, -1, 512),
-        nn.ReLU(),
-        sh.PartialLayer(nn.Linear, -1, num_classes),
-        nn.Softmax()
+        lambda i: nn.Conv2d(i, 16, 3),
+        lambda i: nn.ReLU(),
+        lambda i: nn.Conv2d(i, 32, 4),
+        lambda i: nn.ReLU(),
+        lambda i: nn.Conv2d(i, 64, 5),
+        lambda i: nn.ReLU(),
+        lambda i: nn.MaxPool2d(2),
+        lambda i: nn.Conv2d(i, 64, 6),
+        lambda i: nn.ReLU(),
+        lambda i: nn.Conv2d(i, 64, 5),
+        lambda i: nn.ReLU(),
+        lambda i: nn.MaxPool2d(2),
+        lambda i: nn.Conv2d(i, 128, 4),
+        lambda i: nn.ReLU(),
+        lambda i: nn.Conv2d(i, 64, 4),
+        lambda i: nn.ReLU(),
+        lambda i: nn.Conv2d(i, 64, 3),
+        lambda i: nn.ReLU(),
+        lambda i: nn.Flatten(),
+        lambda i: nn.Linear(i, 1024),
+        lambda i: nn.ReLU(),
+        lambda i: nn.Linear(i, 1024),
+        lambda i: nn.ReLU(),
+        lambda i: nn.Linear(i, 512),
+        lambda i: nn.ReLU(),
+        lambda i: nn.Linear(i, num_classes),
+        lambda i: nn.Softmax()
     ]
 
 
-# TODO: generalize
+# TODO: generalize and clean up
 # TODO: device? keep in mind both data and network will need to be on same device
 def create_network(layers, loader):
-    return nn.Sequential(
-        *sh.infer_shapes_on_data(layers, loader=loader)
-    )
+    inferer = sh.ShapeInferer(loader)
+    for l, layer in enumerate(layers[1:]):
+        layers[l+1] = layer(inferer.infer(layer, layers[:l+1]))
+    return nn.Sequential(*layers[1:])
 
 
 def get_output_shape(layer, input_size):
