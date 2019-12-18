@@ -87,7 +87,7 @@ def prepare_example(get_image, get_label):
 
 def define_layers(num_classes):
     return [
-        sh.Input(3),  # TODO: make this always match loader?
+        sh.Input(),
         lambda i: nn.Conv2d(i, 16, 3),
         lambda i: nn.ReLU(),
         lambda i: nn.Conv2d(i, 32, 4),
@@ -118,13 +118,18 @@ def define_layers(num_classes):
     ]
 
 
-# TODO: generalize and clean up
-# TODO: device? keep in mind both data and network will need to be on same device
-def create_network(layers, loader):
-    inferer = sh.ShapeInferer(loader)
-    for l, layer in enumerate(layers[1:]):
-        layers[l+1] = layer(inferer.infer(layer, layers[:l+1]))
-    return nn.Sequential(*layers[1:])
+# assumes that any nested submodules have already had their shape inferred if necessary
+# TODO: in the future may want a recursive function for that
+def infer_shapes(layers, loader):
+    infer = sh.ShapeInferer(loader)
+    for l in range(len(layers[1:])):
+        layers[l+1] = layers[l+1](infer(layers[:l+1]))
+
+    return layers[1:]
+
+
+def create_network(layers):
+    return nn.Sequential(*layers)
 
 
 def get_output_shape(layer, input_size):
@@ -279,7 +284,7 @@ def run():
     print("using ", device)
 
     layers = define_layers(num_classes)
-    net = create_network(layers, loader)
+    net = create_network(infer_shapes(layers, loader))
     net = net.to(device)
 
     loss_func = nn.CrossEntropyLoss()
