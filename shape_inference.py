@@ -2,6 +2,16 @@ import torch.nn as nn
 from app import dry_run
 
 
+# assumes that any nested submodules have already had their shape inferred if necessary
+# TODO: in the future may want a recursive function for that
+def infer_shapes(layers, loader):
+    infer = ShapeInferer(loader)
+    for l in range(len(layers[1:])):
+        layers[l+1] = layers[l+1](infer(layers[:l+1]))
+
+    return layers[1:]
+
+
 class Input(nn.Module):
     def __init__(self, input_size=None):
         super(Input, self).__init__()

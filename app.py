@@ -1,5 +1,4 @@
 from typing import Any, Iterator
-import csv
 import random
 import functools
 from copy import deepcopy
@@ -16,7 +15,8 @@ import data.handling as dt
 import callbacks as cb
 import metrics as mt
 from functional.core import pipe
-from utils import try_reduce_list, run_callbacks
+import net.initialization as ninit
+from net.execution import dry_run, train, validate, test, train_step, Trainer
 from profiling import profile_cuda_memory_by_layer
 from performance import optimize_cuda_for_fixed_input_size
 
@@ -26,40 +26,6 @@ from performance import optimize_cuda_for_fixed_input_size
 metadata_path = 'D:/HDD Data/CMAopenaccess/data.csv'
 data_dir = 'D:/HDD Data/CMAopenaccess/images/'
 # TODO: see if there's anything we can do to avoid passing device everywhere without making it global/unconfigurable
-# TODO: try and move general functions out
-
-
-class Trainer:
-
-    def __init__(self, optimizer, loss):
-        self.optimizer = optimizer
-        self.loss = loss
-
-
-def load_metadata(path, cols, class_cols=tuple(), valid_only=True):
-    metadata = []
-    # one dict for each class col
-    class_to_index = [{}] * len(class_cols)
-    index_to_class = [{}] * len(class_cols)
-    next_indices = [0] * len(class_cols) # next index for a new class value
-    with open(path, 'r', newline='', encoding="utf8") as metadata_file:
-        reader = csv.reader(metadata_file)
-        headers = next(reader)
-        for row in reader:
-            if len(row) != 0:
-                metadatum = [row[c] for c in cols]
-                # for all class cols, add their vals to the class_to_index and index_to_class dicts if not there already
-                for c, class_col in enumerate(class_cols):
-                    if not row[class_col] in class_to_index[c]:
-                        class_to_index[c][row[class_col]] = next_indices[c]
-                        index_to_class[c][next_indices[c]] = row[class_col]
-                        next_indices[c] += 1
-                if valid_only and '' in metadatum:
-                    continue
-                metadata.append(metadatum)
-    len_metadata = len(metadata)
-    # split off the headers
-    return metadata, len_metadata, headers, class_to_index, index_to_class, next_indices[-1]
 
 
 # allows for variable-sized inputs in a batch
@@ -67,22 +33,6 @@ def custom_collate(batch):
     inputs, targets = [e[0] for e in batch], [e[1] for e in batch]
     targets = torch.LongTensor(targets)
     return [inputs, targets]
-
-
-def get_target(get_label, class_to_index):
-
-    def _get(metadatum):
-        label = get_label(metadatum)
-        label = class_to_index[-1][label]
-        return torch.tensor(label)
-    return _get
-
-
-# composes a closure to get the image and label for a metadatum given functions for getting each separately
-def prepare_example(get_image, get_label):
-    def _prepare(metadatum):
-        return get_image(metadatum), get_label(metadatum)
-    return _prepare
 
 
 def define_layers(num_classes):
@@ -118,102 +68,6 @@ def define_layers(num_classes):
     ]
 
 
-# assumes that any nested submodules have already had their shape inferred if necessary
-# TODO: in the future may want a recursive function for that
-def infer_shapes(layers, loader):
-    infer = sh.ShapeInferer(loader)
-    for l in range(len(layers[1:])):
-        layers[l+1] = layers[l+1](infer(layers[:l+1]))
-
-    return layers[1:]
-
-
-def create_network(layers):
-    return nn.Sequential(*layers)
-
-
-def get_output_shape(layer, input_size):
-    dummy_input = torch.zeros(input_size)
-    dummy_output = layer(dummy_input)
-    return dummy_output.size
-
-
-# get whether this module and each submodule recursively is in train or evaluation mode
-def get_train_mode_tree(module):
-    def _get_mode(module, mode):
-        mode.append([module.training])
-        for submodule in module.children():
-            mode[-1].append(_get_mode(submodule, mode))
-        return mode
-    return _get_mode(module, [])
-
-
-# set the train or evaluation state of this module and each submodule recursively
-def set_train_mode_tree(module, mode):
-    module.train(mode[0])
-    for s, submodule in enumerate(module.children()):
-        set_train_mode_tree(submodule, mode[s])
-
-
-# runs the network once without modifying the loader's state as a test/for profiling
-def dry_run(net, loader, trainer, train_step_func, device=None):
-    def _apply():
-        prev_mode = get_train_mode_tree(net)
-        inputs, gtruth = iter(loader).next()
-        result = train_step_func(net, trainer, device=device)(inputs, gtruth)
-        set_train_mode_tree(net, prev_mode)
-        return result
-    return _apply
-
-
-def train_step(net, trainer, device=None):
-    def _apply(inputs, gtruth):
-        inputs, gtruth = inputs.to(device, non_blocking=True), gtruth.to(device, non_blocking=True)
-        trainer.optimizer.zero_grad()  # reset the gradients to zero
-
-        # run the inputs through the network and compute loss relative to gtruth
-        outputs = net(inputs)
-        loss = trainer.loss(outputs, gtruth)
-        loss.backward()
-        trainer.optimizer.step()
-        return loss
-    return _apply
-
-
-def train(net, loader, trainer, callbacks=None, device=None, epochs=1):
-    if callbacks is None:
-        callbacks = []
-
-    steps_per_epoch = len(loader)
-    callbacks = [callback(steps_per_epoch) for callback in callbacks]
-    take_step = train_step(net, trainer, device=device)
-
-    for epoch in range(epochs):
-        print('----BEGIN EPOCH ', epoch, '----')
-        for step, (inputs, gtruth) in enumerate(loader):
-            loss = take_step(inputs, gtruth)
-            run_callbacks("on_step", callbacks, loss, step, epoch)
-        run_callbacks("on_epoch_end", callbacks)
-    print('TRAINING COMPLETE!')
-
-
-def test(net, loader, metrics=None, device=None):
-    if metrics is None:
-        metrics = []
-
-    print('TESTING')
-    with torch.no_grad():
-        for (inputs, gtruth) in loader:
-            inputs, gtruth = inputs.to(device, non_blocking=True), gtruth.to(device, non_blocking=True)
-            outputs = net(inputs)
-            run_callbacks("on_item", metrics, inputs, outputs, gtruth)
-    return try_reduce_list(run_callbacks("on_end", metrics))
-
-
-# validation is just an alias for testing
-validate = test
-
-
 def get_from_metadata():
     get = rt.get_img_from_file_or_url(img_format='JPEG')
 
@@ -229,7 +83,7 @@ def get_label(metadatum):
 
 
 def run():
-    metadata, len_metadata, metadata_headers, class_to_index, index_to_class, num_classes = load_metadata(
+    metadata, len_metadata, metadata_headers, class_to_index, index_to_class, num_classes = rt.load_metadata(
         metadata_path,
         cols=(COL_ID, COL_TYPE, COL_IMG_WEB),
         class_cols=(COL_TYPE,)
@@ -254,9 +108,9 @@ def run():
     dataset, validation_dataset, test_dataset = (
         dt.metadata_to_prepared_dataset(
             m,
-            prepare_example(
+            dt.prepare_example(
                 pipe(get_from_metadata(), it.random_fit_to((256, 256)), it.to_tensor()),
-                get_target(get_label, class_to_index)
+                dt.get_target(get_label, class_to_index)
             )
         )
         for m in (train_metadata, validation_metadata, test_metadata)
@@ -284,7 +138,7 @@ def run():
     print("using ", device)
 
     layers = define_layers(num_classes)
-    net = create_network(infer_shapes(layers, loader))
+    net = ninit.from_iterable(sh.infer_shapes(layers, loader))
     net = net.to(device)
 
     loss_func = nn.CrossEntropyLoss()
