@@ -15,17 +15,16 @@ import data.handling as dt
 import callbacks as cb
 import metrics as mt
 from functional.core import pipe
-import net.initialization as ninit
-from net.execution import dry_run, train, validate, test, train_step, Trainer
+import model.initialization as ninit
+from model.execution import dry_run, train, validate, test, train_step, Trainer
 from profiling import profile_cuda_memory_by_layer
-from performance import optimize_cuda_for_fixed_input_size
+from performance import optimize_cuda_for_fixed_input_size, checkpoint_sequential
 
 
-# TODO: need to add functionality to add move feature maps out of VRAM - https://medium.com/syncedreview/how-to-train-a-very-large-and-deep-model-on-one-gpu-7b7edfe2d072 https://arxiv.org/pdf/1602.08124.pdf https://medium.com/tensorflow/fitting-larger-networks-into-memory-583e3c758ff9
-# TODO: these look most promising: https://www.sicara.ai/blog/2019-28-10-deep-learning-memory-usage-and-pytorch-optimization-tricks https://pytorch.org/docs/stable/checkpoint.html
 metadata_path = 'D:/HDD Data/CMAopenaccess/data.csv'
 data_dir = 'D:/HDD Data/CMAopenaccess/images/'
 # TODO: see if there's anything we can do to avoid passing device everywhere without making it global/unconfigurable
+# TODO: next step: make this a library
 
 
 # allows for variable-sized inputs in a batch
@@ -147,6 +146,9 @@ def run():
     trainer = Trainer(optimizer, loss_func)
 
     metrics = [mt.calc_category_accuracy()]
+
+    # TODO: make this dynamically set no/the correct number of checkpoints based on avail memory
+    #net = checkpoint_sequential(net, 3)
 
     if is_cuda:
         profile_cuda_memory_by_layer(net, dry_run(net, loader, trainer, train_step, device=device), device=device)

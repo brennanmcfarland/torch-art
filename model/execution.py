@@ -1,6 +1,6 @@
 import torch
 
-from net.state import get_train_mode_tree, set_train_mode_tree
+from model.state import get_train_mode_tree, set_train_mode_tree
 from utils import try_reduce_list, run_callbacks
 
 
