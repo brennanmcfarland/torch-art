@@ -1,5 +1,6 @@
 
 
+# TODO: may be able to use .modules() instead
 # get whether this module and each submodule recursively is in train or evaluation mode
 def get_train_mode_tree(module):
     def _get_mode(module, mode):

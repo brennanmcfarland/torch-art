@@ -18,6 +18,35 @@ def optimize_cuda_for_fixed_input_size():
     backends.cudnn.benchmark = True
 
 
+# given a function to insert a certain number of checkpoints in a module, iteratively test an increasing number of
+# checkpoints until the model (and running it) fits in memory
+def adapt_checkpointing(checkpoint_func, run_func, module):
+    # TODO: set a max before hard failure?
+    # I'd use recursion here, but it would make it very easy to blow up the stack by accident
+    num_checkpoints = 0
+    while True:
+        try:
+            # create checkpoints and run the model
+            checkpointed = checkpoint_func(module, num_checkpoints)
+            run_func(checkpointed)
+            print('sufficient memory for ', num_checkpoints, ' checkpoints')
+            # TODO: need to adapt this check to work for checkpoint funcs that don't just operate on highest submodules
+            if num_checkpoints > len(list(module.children())) ** .5:
+                print('WARNING: number of checkpoints above sqrt of layers, likely to incur high performance cost')
+            return checkpointed
+        except RuntimeError as err:
+            print(err)
+            if 'out of memory' in str(err):
+                print('insufficient memory for ', num_checkpoints, ' checkpoints, retrying with ', num_checkpoints + 1)
+
+                # delete any params handing around and clear the cache to have a clean slate to try again
+                for param in module.parameters():
+                    if param.grad is not None:
+                        del param.grad
+                cuda.empty_cache()
+                num_checkpoints += 1
+
+
 # checkpoint but only operates on top-level layers in a sequential model
 # NOTE: there can be no generalized implementation for checkpointing at the leaf module level since checkpointing at
 #  varying levels of submodule recursion could cause problems for modules that contain extra logic besides just
@@ -26,11 +55,11 @@ def optimize_cuda_for_fixed_input_size():
 #  do convolutions/dense only
 #  pass in what layers we want to checkpoint
 #  checkpoint at a given submodule recursion depth
-# TODO: need an adaptive algorithm that figures out min # checkpoints needed
-# TODO: for memory constraints and warns if over sqrt(n) (n = # layers)
-# TODO: make it work for any ssuch checkpointing func
 def checkpoint_sequential(module, num_checkpoints):
-    return CheckpointedSequential(module, num_checkpoints)
+    if num_checkpoints == 0:
+        return module
+    else:
+        return CheckpointedSequential(module, num_checkpoints)
 
 
 # checkpoint container class holding all sequential layers scoped by a checkpoint

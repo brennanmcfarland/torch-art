@@ -18,7 +18,7 @@ from functional.core import pipe
 import model.initialization as ninit
 from model.execution import dry_run, train, validate, test, train_step, Trainer
 from profiling import profile_cuda_memory_by_layer
-from performance import optimize_cuda_for_fixed_input_size, checkpoint_sequential
+from performance import optimize_cuda_for_fixed_input_size, checkpoint_sequential, adapt_checkpointing
 
 
 metadata_path = 'D:/HDD Data/CMAopenaccess/data.csv'
@@ -56,6 +56,10 @@ def define_layers(num_classes):
         lambda i: nn.Conv2d(i, 64, 3),
         lambda i: nn.ReLU(),
         lambda i: nn.Flatten(),
+        lambda i: nn.Linear(i, 4096),
+        lambda i: nn.ReLU(),
+        lambda i: nn.Linear(i, 2048),
+        lambda i: nn.ReLU(),
         lambda i: nn.Linear(i, 1024),
         lambda i: nn.ReLU(),
         lambda i: nn.Linear(i, 1024),
@@ -147,8 +151,11 @@ def run():
 
     metrics = [mt.calc_category_accuracy()]
 
-    # TODO: make this dynamically set no/the correct number of checkpoints based on avail memory
-    #net = checkpoint_sequential(net, 3)
+    net = adapt_checkpointing(
+        checkpoint_sequential,
+        lambda n: dry_run(n, loader, trainer, train_step, device=device)(),
+        net
+    )
 
     if is_cuda:
         profile_cuda_memory_by_layer(net, dry_run(net, loader, trainer, train_step, device=device), device=device)
