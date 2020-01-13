@@ -24,7 +24,6 @@ from performance import optimize_cuda_for_fixed_input_size, checkpoint_sequentia
 metadata_path = 'D:/HDD Data/CMAopenaccess/data.csv'
 data_dir = 'D:/HDD Data/CMAopenaccess/images/'
 # TODO: see if there's anything we can do to avoid passing device everywhere without making it global/unconfigurable
-# TODO: next step: make this a library
 
 
 # allows for variable-sized inputs in a batch

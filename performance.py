@@ -4,15 +4,15 @@ import torch.nn as nn
 import torch.utils as utils
 
 
-# TODO: need to add functionality to add move feature maps out of VRAM - https://medium.com/syncedreview/how-to-train-a-very-large-and-deep-model-on-one-gpu-7b7edfe2d072 https://arxiv.org/pdf/1602.08124.pdf https://medium.com/tensorflow/fitting-larger-networks-into-memory-583e3c758ff9
+# TODO: move feature maps out of VRAM
+#  - https://medium.com/syncedreview/how-to-train-a-very-large-and-deep-model-on-one-gpu-7b7edfe2d072
+#  https://arxiv.org/pdf/1602.08124.pdf https://medium.com/tensorflow/fitting-larger-networks-into-memory-583e3c758ff9
 # TODO: do both the checkpointing and feature map moving approach and compare tradeoffs w benchmarking
 
 
 # performs optimizations in the backend if all input sizes are the same
 # if they're not though this will likely just make performance worse
 # NOTE: only works on cuda
-
-
 def optimize_cuda_for_fixed_input_size():
     assert cuda.is_available()
     backends.cudnn.benchmark = True
