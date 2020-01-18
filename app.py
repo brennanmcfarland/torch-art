@@ -8,17 +8,18 @@ import torch.nn as nn
 import torch.cuda as cuda
 import torch.optim as optim
 
-import shape_inference as sh
-import transforms.image_transforms as it
-import data.retrieval as rt
-import data.handling as dt
-import callbacks as cb
-import metrics as mt
-from functional.core import pipe
-import model.initialization as ninit
-from model.execution import dry_run, train, validate, test, train_step, Trainer
-from profiling import profile_cuda_memory_by_layer
-from performance import optimize_cuda_for_fixed_input_size, checkpoint_sequential, adapt_checkpointing
+afmt = __import__('arctic-flaming-monkey-typhoon')
+import afmt.shape_inference as sh
+import afmt.transforms.image_transforms as it
+import afmt.data.retrieval as rt
+import afmt.data.handling as dt
+import afmt.callbacks as cb
+import afmt.metrics as mt
+from afmt.functional.core import pipe
+import afmt.model.initialization as ninit
+from afmt.model.execution import dry_run, train, validate, test, train_step, Trainer
+from afmt.profiling import profile_cuda_memory_by_layer
+from afmt.performance import optimize_cuda_for_fixed_input_size, checkpoint_sequential, adapt_checkpointing
 
 
 metadata_path = 'D:/HDD Data/CMAopenaccess/data.csv'
