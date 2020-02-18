@@ -137,12 +137,12 @@ def run():
     validation_loader.build()
     test_loader.build()
 
-    loader = DALIGenericIterator(loader, ['data', 'label'], len(train_metadata))
-    validation_loader = DALIGenericIterator(validation_loader, ['data', 'label'], len(validation_metadata))
-    test_loader = DALIGenericIterator(test_loader, ['data', 'label'], len(test_metadata))
+    #loader = DALIGenericIterator(loader, ['data', 'label'], len(train_metadata))
+    #validation_loader = DALIGenericIterator(validation_loader, ['data', 'label'], len(validation_metadata))
+    #test_loader = DALIGenericIterator(test_loader, ['data', 'label'], len(test_metadata))
 
     dataiter = iter(loader)
-    demo_batch = dataiter.next()
+    demo_batch = next(dataiter)
 
     is_cuda = cuda.is_available()
 
