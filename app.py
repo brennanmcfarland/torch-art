@@ -22,8 +22,8 @@ from arctic_flaming_monkey_typhoon.performance import \
     optimize_cuda_for_fixed_input_size, checkpoint_sequential, adapt_checkpointing
 
 
-metadata_path = 'D:/HDD Data/CMAopenaccess/data.csv'
-data_dir = 'D:/HDD Data/CMAopenaccess/images/'
+metadata_path = '/media/guest/Main Storage/HDD Data/CMAopenaccess/data.csv'
+data_dir = '/media/guest/Main Storage/HDD Data/CMAopenaccess/preprocessed_images/'
 # TODO: see if there's anything we can do to avoid passing device everywhere without making it global/unconfigurable
 
 
@@ -72,10 +72,10 @@ def define_layers(num_classes):
 
 
 def get_from_metadata():
-    get = rt.get_img_from_file_or_url(img_format='JPEG')
+    get = rt.get_img_from_file_or_url(img_format='PNG')
 
     def _apply(metadatum):
-        filepath = data_dir + metadatum[0] + '.jpg'
+        filepath = data_dir + metadatum[0] + '.png'
         url = metadatum[-1]
         return get(filepath, url)
     return _apply
@@ -109,28 +109,37 @@ def run():
     )
 
     dataset, validation_dataset, test_dataset = (
-        dt.metadata_to_prepared_dataset(
-            m,
-            dt.prepare_example(
-                pipe(get_from_metadata(), it.random_fit_to((256, 256)), it.to_tensor()),
-                dt.get_target(get_label, class_to_index)
-            )
-        )
+        # dt.metadata_to_prepared_dataset(
+        #     m,
+        #     dt.prepare_example(
+        #         pipe(get_from_metadata(), it.to_tensor()),
+        #         dt.get_target(get_label, class_to_index)
+        #     )
+        # )
+        dt.DALIDataset(metadata=m, data_dir=data_dir, class_to_index=class_to_index)
         for m in (train_metadata, validation_metadata, test_metadata)
     )
+
+    dataset.build()
+    validation_dataset.build()
+    test_dataset.build()
 
     print(metadata_headers)
     print(metadata[:10])
     print(len(dataset))
 
+    from nvidia.dali.plugin.pytorch import DALIGenericIterator
     loader, validation_loader, test_loader = (
-        dt.dataset_to_loader(
-            d,
-            batch_size=16,
-            shuffle=True,  # shuffle every epoch so learning and testing is order-independent
-            num_workers=0,
-            pin_memory=True
-        ) for d in (dataset, validation_dataset, test_dataset))
+            dt.DALIDataset(metadata=m, data_dir=data_dir, class_to_index=class_to_index)
+        for m in (train_metadata, validation_metadata, test_metadata))
+
+    loader.build()
+    validation_loader.build()
+    test_loader.build()
+
+    loader = DALIGenericIterator(loader, ['data', 'label'], len(train_metadata))
+    validation_loader = DALIGenericIterator(validation_loader, ['data', 'label'], len(validation_metadata))
+    test_loader = DALIGenericIterator(test_loader, ['data', 'label'], len(test_metadata))
 
     dataiter = iter(loader)
     demo_batch = dataiter.next()
