@@ -9,21 +9,24 @@ import torch.cuda as cuda
 import torch.optim as optim
 
 import arctic_flaming_monkey_typhoon.shape_inference as sh
-import arctic_flaming_monkey_typhoon.transforms.image_transforms as it
 import arctic_flaming_monkey_typhoon.data.retrieval as rt
-import arctic_flaming_monkey_typhoon.data.handling as dt
+import arctic_flaming_monkey_typhoon.data.handling.dali as dt
+import arctic_flaming_monkey_typhoon.data.handling.handling as hd
 import arctic_flaming_monkey_typhoon.callbacks as cb
 import arctic_flaming_monkey_typhoon.metrics as mt
-from arctic_flaming_monkey_typhoon.functional.core import pipe
 import arctic_flaming_monkey_typhoon.model.initialization as ninit
 from arctic_flaming_monkey_typhoon.model.execution import dry_run, train, validate, test, train_step, Trainer
 from arctic_flaming_monkey_typhoon.profiling import profile_cuda_memory_by_layer
 from arctic_flaming_monkey_typhoon.performance import \
     optimize_cuda_for_fixed_input_size, checkpoint_sequential, adapt_checkpointing
 
-
 metadata_path = '/media/guest/Main Storage/HDD Data/CMAopenaccess/data.csv'
 data_dir = '/media/guest/Main Storage/HDD Data/CMAopenaccess/preprocessed_images/'
+train_label_out_path = './train_labels.csv'
+validation_label_out_path = './validation_labels.csv'
+test_label_out_path = './test_labels.csv'
+
+
 # TODO: see if there's anything we can do to avoid passing device everywhere without making it global/unconfigurable
 
 
@@ -78,11 +81,24 @@ def get_from_metadata():
         filepath = data_dir + metadatum[0] + '.png'
         url = metadatum[-1]
         return get(filepath, url)
+
     return _apply
 
 
 def get_label(metadatum):
     return metadatum[1]
+
+
+# write metadata image-label mappings to a file so the pipeline can efficiently load them, and return a loader
+def make_loader(label_out_dir, metadata, class_to_index):
+    hd.write_transformed_metadata_to_file(
+        metadata, label_out_dir, lambda m: m[0] + '.png ' + str(class_to_index[0][m[1]]) + '\n'
+    )
+    return dt.DALIIterableDataset(
+        dt.dali_standard_image_classification_pipeline(data_dir, label_out_dir),
+        metadata=metadata,
+        batch_size=16
+    )
 
 
 def run():
@@ -108,38 +124,17 @@ def run():
         metadata[n:m] for m, n in zip(data_split_points[:-1], data_split_points[1:])
     )
 
-    dataset, validation_dataset, test_dataset = (
-        # dt.metadata_to_prepared_dataset(
-        #     m,
-        #     dt.prepare_example(
-        #         pipe(get_from_metadata(), it.to_tensor()),
-        #         dt.get_target(get_label, class_to_index)
-        #     )
-        # )
-        dt.DALIDataset(metadata=m, data_dir=data_dir, class_to_index=class_to_index)
-        for m in (train_metadata, validation_metadata, test_metadata)
-    )
-
-    dataset.build()
-    validation_dataset.build()
-    test_dataset.build()
-
     print(metadata_headers)
-    print(metadata[:10])
-    print(len(dataset))
 
-    from nvidia.dali.plugin.pytorch import DALIGenericIterator
-    loader, validation_loader, test_loader = (
-            dt.DALIDataset(metadata=m, data_dir=data_dir, class_to_index=class_to_index)
-        for m in (train_metadata, validation_metadata, test_metadata))
+    loader, validation_loader, test_loader = (make_loader(ldir, m, class_to_index)
+                                              for ldir, m in zip(
+        (train_label_out_path, validation_label_out_path, test_label_out_path),
+        (train_metadata, validation_metadata, test_metadata)
+    ))
 
     loader.build()
     validation_loader.build()
     test_loader.build()
-
-    #loader = DALIGenericIterator(loader, ['data', 'label'], len(train_metadata))
-    #validation_loader = DALIGenericIterator(validation_loader, ['data', 'label'], len(validation_metadata))
-    #test_loader = DALIGenericIterator(test_loader, ['data', 'label'], len(test_metadata))
 
     dataiter = iter(loader)
     demo_batch = next(dataiter)
