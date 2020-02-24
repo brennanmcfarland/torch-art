@@ -1,4 +1,4 @@
-from arctic_flaming_monkey_typhoon.data import retrieval as rt
+from arc23.data import retrieval as rt
 
 metadata_path = '/media/guest/Main Storage/HDD Data/CMAopenaccess/data.csv'
 out_dir = './preprocessed_data.csv'

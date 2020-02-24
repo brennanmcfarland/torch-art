@@ -8,16 +8,16 @@ import torch.nn as nn
 import torch.cuda as cuda
 import torch.optim as optim
 
-import arctic_flaming_monkey_typhoon.shape_inference as sh
-import arctic_flaming_monkey_typhoon.data.retrieval as rt
-import arctic_flaming_monkey_typhoon.data.handling.dali as dt
-import arctic_flaming_monkey_typhoon.data.handling.handling as hd
-import arctic_flaming_monkey_typhoon.callbacks as cb
-import arctic_flaming_monkey_typhoon.metrics as mt
-import arctic_flaming_monkey_typhoon.model.initialization as ninit
-from arctic_flaming_monkey_typhoon.model.execution import dry_run, train, validate, test, train_step, Trainer
-from arctic_flaming_monkey_typhoon.profiling import profile_cuda_memory_by_layer
-from arctic_flaming_monkey_typhoon.performance import \
+import arc23.shape_inference as sh
+import arc23.data.retrieval as rt
+import arc23.data.handling.dali as dt
+import arc23.data.handling.handling as hd
+import arc23.callbacks as cb
+import arc23.metrics as mt
+import arc23.model.initialization as ninit
+from arc23.model.execution import dry_run, train, validate, test, train_step, Trainer
+from arc23.profiling import profile_cuda_memory_by_layer
+from arc23.performance import \
     optimize_cuda_for_fixed_input_size, checkpoint_sequential, adapt_checkpointing
 
 metadata_path = '/media/guest/Main Storage/HDD Data/CMAopenaccess/data.csv'

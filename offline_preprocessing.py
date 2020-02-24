@@ -1,8 +1,8 @@
 import random
-import arctic_flaming_monkey_typhoon.data.retrieval as rt
-import arctic_flaming_monkey_typhoon.data.handling as dt
-import arctic_flaming_monkey_typhoon.transforms.image_transforms as it
-from arctic_flaming_monkey_typhoon.functional.core import pipe
+import arc23.data.retrieval as rt
+import arc23.data.handling as dt
+import arc23.transforms.image_transforms as it
+from arc23.functional.core import pipe
 
 
 metadata_path = '/media/guest/Main Storage/HDD Data/CMAopenaccess/data.csv'
