@@ -102,6 +102,9 @@ def make_loader(label_out_dir, metadata, class_to_index):
 
 
 def run():
+
+    print('preparing metadata...')
+
     metadata, len_metadata, metadata_headers, class_to_index, index_to_class, num_classes = rt.load_metadata(
         metadata_path,
         cols=(COL_ID, COL_TYPE, COL_IMG_WEB),
@@ -125,6 +128,8 @@ def run():
     )
 
     print(metadata_headers)
+
+    print('initializing loaders...')
 
     loader, validation_loader, test_loader = (make_loader(ldir, m, class_to_index)
                                               for ldir, m in zip(
@@ -157,12 +162,16 @@ def run():
 
     net = adapt_checkpointing(
         checkpoint_sequential,
-        lambda n: dry_run(n, loader, trainer, train_step, device=device)(),
+        lambda n: dry_run(n, loader, trainer, functools.partial(train_step, squeeze_gtruth=True), device=device)(),
         net
     )
 
     if is_cuda:
-        profile_cuda_memory_by_layer(net, dry_run(net, loader, trainer, train_step, device=device), device=device)
+        profile_cuda_memory_by_layer(
+            net,
+            dry_run(net, loader, trainer, functools.partial(train_step, squeeze_gtruth=True), device=device),
+            device=device
+        )
         optimize_cuda_for_fixed_input_size()
 
     accuracy = test(net, test_loader, metrics, device)
@@ -174,7 +183,7 @@ def run():
         cb.validate(validate, net, validation_loader, metrics, device)
     ]
 
-    train(net, loader, trainer, callbacks, device, 3)
+    train(net, loader, trainer, callbacks, device, 100, squeeze_gtruth=True)
 
     accuracy = test(net, test_loader, metrics, device)
     print("post-training accuracy: ", accuracy)
