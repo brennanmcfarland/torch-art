@@ -2,11 +2,13 @@ from typing import Any, Iterator
 import random
 import functools
 from copy import deepcopy
+import numpy as np
 
 import torch
 import torch.nn as nn
 import torch.cuda as cuda
 import torch.optim as optim
+import matplotlib.pyplot as plt
 
 import arc23.shape_inference as sh
 import arc23.data.retrieval as rt
@@ -14,14 +16,19 @@ import arc23.data.handling.dali as dt
 import arc23.data.handling.handling as hd
 import arc23.callbacks as cb
 import arc23.metrics as mt
+import arc23.output as out
 import arc23.model.initialization as ninit
 from arc23.model.execution import dry_run, train, validate, test, train_step, Trainer
 from arc23.profiling import profile_cuda_memory_by_layer
 from arc23.performance import \
     optimize_cuda_for_fixed_input_size, checkpoint_sequential, adapt_checkpointing
+from arc23.model import hooks as mh
+from arc23.__utils import on_interval
+from arc23.layers.residual import Residual
 
-metadata_path = '/media/guest/Main Storage/HDD Data/CMAopenaccess/data.csv'
-data_dir = '/media/guest/Main Storage/HDD Data/CMAopenaccess/preprocessed_images/'
+
+metadata_path = './preprocessed_data.csv'
+data_dir = '/media/guest/Main Storage/HDD Data/CMAopenaccess/preprocessed_images'
 train_label_out_path = './train_labels.csv'
 validation_label_out_path = './validation_labels.csv'
 test_label_out_path = './test_labels.csv'
@@ -40,36 +47,133 @@ def custom_collate(batch):
 def define_layers(num_classes):
     return [
         sh.Input(),
-        lambda i: nn.Conv2d(i, 16, 3),
-        lambda i: nn.ReLU(),
-        lambda i: nn.Conv2d(i, 32, 4),
-        lambda i: nn.ReLU(),
-        lambda i: nn.Conv2d(i, 64, 5),
-        lambda i: nn.ReLU(),
-        lambda i: nn.MaxPool2d(2),
-        lambda i: nn.Conv2d(i, 64, 6),
-        lambda i: nn.ReLU(),
-        lambda i: nn.Conv2d(i, 64, 5),
-        lambda i: nn.ReLU(),
+        lambda i: nn.Conv2d(i, 32, 3),
+        lambda i: nn.LeakyReLU(),
+        lambda i: nn.BatchNorm2d(i),
+        lambda i: nn.Conv2d(i, 64, 4),
+        lambda i: nn.LeakyReLU(),
+        lambda i: nn.BatchNorm2d(i),
+        lambda i: Residual(
+            nn.Sequential(
+                nn.ReflectionPad2d(3),
+                nn.Conv2d(i, 64, 4),
+                nn.LeakyReLU(),
+                nn.BatchNorm2d(i),
+                nn.Conv2d(i, 64, 4),
+                nn.LeakyReLU(),
+                nn.BatchNorm2d(i),
+            )
+        ),
+        lambda i: nn.Conv2d(i, 128, 4),
+        lambda i: nn.LeakyReLU(),
+        lambda i: nn.BatchNorm2d(i),
+        lambda i: Residual(
+            nn.Sequential(
+                nn.ReflectionPad2d(2),
+                nn.Conv2d(i, 128, 5),
+                nn.LeakyReLU(),
+                nn.BatchNorm2d(i),
+                nn.ReflectionPad2d(2),
+                nn.Conv2d(i, 128, 5),
+                nn.LeakyReLU(),
+                nn.BatchNorm2d(i),
+            )
+        ),
         lambda i: nn.MaxPool2d(2),
         lambda i: nn.Conv2d(i, 128, 4),
-        lambda i: nn.ReLU(),
-        lambda i: nn.Conv2d(i, 64, 4),
-        lambda i: nn.ReLU(),
-        lambda i: nn.Conv2d(i, 64, 3),
-        lambda i: nn.ReLU(),
+        lambda i: nn.LeakyReLU(),
+        lambda i: nn.BatchNorm2d(i),
+        lambda i: Residual(
+            nn.Sequential(
+                nn.ReflectionPad2d(3),
+                nn.Conv2d(i, 128, 4),
+                nn.LeakyReLU(),
+                nn.BatchNorm2d(i),
+                nn.Conv2d(i, 128, 4),
+                nn.LeakyReLU(),
+                nn.BatchNorm2d(i),
+            )
+        ),
+        lambda i: nn.Conv2d(i, 128, 5),
+        lambda i: nn.LeakyReLU(),
+        lambda i: nn.BatchNorm2d(i),
+        lambda i: nn.MaxPool2d(2),
+        lambda i: nn.Conv2d(i, 256, 4),
+        lambda i: nn.LeakyReLU(),
+        lambda i: nn.BatchNorm2d(i),
+        lambda i: Residual(
+            nn.Sequential(
+                nn.ReflectionPad2d(3),
+                nn.Conv2d(i, 256, 4),
+                nn.LeakyReLU(),
+                nn.BatchNorm2d(i),
+                nn.Conv2d(i, 256, 4),
+                nn.LeakyReLU(),
+                nn.BatchNorm2d(i),
+            )
+        ),
+        lambda i: nn.Conv2d(i, 512, 4),
+        lambda i: nn.LeakyReLU(),
+        lambda i: nn.BatchNorm2d(i),
+        lambda i: Residual(
+            nn.Sequential(
+                nn.ReflectionPad2d(6),
+                nn.Conv2d(i, 512, 4),
+                nn.LeakyReLU(),
+                nn.BatchNorm2d(i),
+                nn.Conv2d(i, 512, 4),
+                nn.LeakyReLU(),
+                nn.BatchNorm2d(i),
+                nn.Conv2d(i, 512, 4),
+                nn.LeakyReLU(),
+                nn.BatchNorm2d(i),
+                nn.Conv2d(i, 512, 4),
+                nn.LeakyReLU(),
+                nn.BatchNorm2d(i),
+            )
+        ),
+        lambda i: nn.Conv2d(i, 128, 4),
+        lambda i: nn.LeakyReLU(),
+        lambda i: nn.BatchNorm2d(i),
+        lambda i: nn.Conv2d(i, 128, 3),
+        lambda i: nn.LeakyReLU(),
+        lambda i: nn.BatchNorm2d(i),
+        lambda i: Residual(
+            nn.Sequential(
+                nn.ReflectionPad2d(3),
+                nn.Conv2d(i, 128, 3),
+                nn.LeakyReLU(),
+                nn.BatchNorm2d(i),
+                nn.Conv2d(i, 128, 3),
+                nn.LeakyReLU(),
+                nn.BatchNorm2d(i),
+                nn.Conv2d(i, 128, 3),
+                nn.LeakyReLU(),
+                nn.BatchNorm2d(i),
+            )
+        ),
         lambda i: nn.Flatten(),
-        lambda i: nn.Linear(i, 4096),
-        lambda i: nn.ReLU(),
-        lambda i: nn.Linear(i, 2048),
-        lambda i: nn.ReLU(),
         lambda i: nn.Linear(i, 1024),
-        lambda i: nn.ReLU(),
-        lambda i: nn.Linear(i, 1024),
-        lambda i: nn.ReLU(),
+        lambda i: nn.LeakyReLU(),
+        lambda i: nn.BatchNorm1d(i),
+        lambda i: Residual(
+            nn.Sequential(
+                nn.Linear(i, 1024),
+                nn.LeakyReLU(),
+                nn.BatchNorm1d(i),
+                nn.Linear(i, 1024),
+                nn.LeakyReLU(),
+                nn.BatchNorm1d(i),
+                nn.Linear(i, 1024),
+                nn.LeakyReLU(),
+                nn.BatchNorm1d(i),
+            )
+        ),
         lambda i: nn.Linear(i, 512),
-        lambda i: nn.ReLU(),
+        lambda i: nn.LeakyReLU(),
+        lambda i: nn.BatchNorm1d(i),
         lambda i: nn.Linear(i, num_classes),
+        lambda i: nn.BatchNorm1d(i),
         lambda i: nn.Softmax()
     ]
 
@@ -101,13 +205,19 @@ def make_loader(label_out_dir, metadata, class_to_index):
     )
 
 
+def make_trainer(net):
+    loss_func = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(net.parameters())
+    return Trainer(optimizer, loss_func)
+
+
 def run():
 
     print('preparing metadata...')
 
     metadata, len_metadata, metadata_headers, class_to_index, index_to_class, num_classes = rt.load_metadata(
         metadata_path,
-        cols=(COL_ID, COL_TYPE, COL_IMG_WEB),
+        cols=(COL_IMG_WEB, COL_TYPE),
         class_cols=(COL_TYPE,)
     )
     len_metadata = 31149  # TODO: either the dataset is corrupted/in a different format after this point or the endpoint was down last I tried
@@ -142,7 +252,11 @@ def run():
     test_loader.build()
 
     dataiter = iter(loader)
-    demo_batch = next(dataiter)
+    # demo_batch = next(dataiter)
+    # print(demo_batch['labels'][0].cpu().item())
+    # demo_img = np.swapaxes(demo_batch['inputs'][0].cpu(), 0, -1)
+    # plt.imshow(demo_img / 256.)
+    # plt.show()
 
     is_cuda = cuda.is_available()
 
@@ -153,45 +267,63 @@ def run():
     net = ninit.from_iterable(sh.infer_shapes(layers, loader))
     net = net.to(device)
 
-    loss_func = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(net.parameters())
-
-    trainer = Trainer(optimizer, loss_func)
-
-    metrics = [mt.calc_category_accuracy()]
+    metrics = [mt.category_accuracy()]
 
     net = adapt_checkpointing(
         checkpoint_sequential,
-        lambda n: dry_run(n, loader, trainer, functools.partial(train_step, squeeze_gtruth=True), device=device)(),
+        lambda n: dry_run(n, loader, make_trainer, functools.partial(train_step, squeeze_gtruth=True), device=device)(),
         net
     )
 
     if is_cuda:
         profile_cuda_memory_by_layer(
             net,
-            dry_run(net, loader, trainer, functools.partial(train_step, squeeze_gtruth=True), device=device),
+            dry_run(net, loader, make_trainer, functools.partial(train_step, squeeze_gtruth=True), device=device),
             device=device
         )
         optimize_cuda_for_fixed_input_size()
 
-    accuracy = test(net, test_loader, metrics, device)
+    # the trainer is not used above or it would be modified
+    trainer = make_trainer(net)
+
+    accuracy = test(net, test_loader, metrics, device, squeeze_gtruth=True)
     print("pre-training accuracy: ", accuracy)
 
-    callbacks = [
-        cb.tensorboard_record_loss(),
-        cb.calc_interval_avg_loss(print_interval=16),
-        cb.validate(validate, net, validation_loader, metrics, device)
-    ]
+    callbacks = {
+        "on_step": [
+            out.record_tensorboard_scalar(cb.loss(), out.tensorboard_writer()),
+            lambda steps_per_epoch: on_interval(
+                out.print_with_step(
+                    cb.interval_avg_loss(interval=1)
+                )(steps_per_epoch),
+                16
+            )
+        ],
+        "on_epoch_start": [
+            out.print_tables(
+                cb.layer_stats(
+                    net,
+                    dry_run(net, loader, trainer, functools.partial(train_step, squeeze_gtruth=True), device=device),
+                    [
+                        mh.weight_stats_hook((torch.mean,)),
+                        mh.output_stats_hook((torch.var,)),
+                        mh.grad_stats_hook((torch.var_mean,)),
+                    ]
+                ), titles=["WEIGHT STATS", "OUTPUT_STATS", "GRADIENT STATS"], headers=["Layer", "Value"]
+            ),
+        ],
+        "on_epoch_end": [
+            cb.validate(functools.partial(validate, squeeze_gtruth=True), net, validation_loader, metrics, device)
+        ]
+    }
 
-    train(net, loader, trainer, callbacks, device, 100, squeeze_gtruth=True)
+    train(net, loader, trainer, callbacks, device, 5, squeeze_gtruth=True)
 
-    accuracy = test(net, test_loader, metrics, device)
+    accuracy = test(net, test_loader, metrics, device, squeeze_gtruth=True)
     print("post-training accuracy: ", accuracy)
 
 
 if __name__ == '__main__':
-    COL_ID = 0
-    COL_CREATION_DATE = 9
-    COL_TYPE = 18
-    COL_IMG_WEB = -4  # lower resolution makes for smaller dataset/faster training
+    COL_TYPE = 1
+    COL_IMG_WEB = 0  # lower resolution makes for smaller dataset/faster training
     run()

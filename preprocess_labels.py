@@ -14,4 +14,11 @@ metadata = metadata[:len_metadata]
 
 with open(out_dir, 'w+', newline='', encoding="utf8") as out_file:
     for metadatum in metadata:
-        out_file.write(metadatum[0] + '.png ' + str(class_to_index[0][metadatum[1]]) + '\n')
+        category = None
+        # omit ambiguous categories
+        m = class_to_index[0][metadatum[1]]
+        if m == 5 or m == 7 or m == 8 or m == 12 or m == 13 or m == 14 or m == 18 or m == 19 or m == 20 or m == 21 or m == 22 or m == 25 or m == 27 or m == 28 or m == 34 or m == 36 or m == 37 or m == 38 or m == 39 or m == 40 or m == 41 or m == 42 or m == 45 or m == 48 or m == 49 or m == 51 or m == 59 or m == 62:
+            pass
+        else:
+            category = m
+            out_file.write(metadatum[0] + ',' + metadatum[1] + '\n')
