@@ -267,7 +267,7 @@ def run():
     net = ninit.from_iterable(sh.infer_shapes(layers, loader))
     net = net.to(device)
 
-    metrics = [mt.category_accuracy()]
+    metrics = [mt.accuracy_by_category(index_to_class[0].keys()), mt.category_accuracy()]
 
     net = adapt_checkpointing(
         checkpoint_sequential,
