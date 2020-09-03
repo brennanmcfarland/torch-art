@@ -3,6 +3,7 @@ import random
 import functools
 from copy import deepcopy
 import numpy as np
+import os
 
 import torch
 import torch.nn as nn
@@ -18,11 +19,13 @@ import arc23.callbacks as cb
 import arc23.metrics as mt
 import arc23.output as out
 import arc23.model.initialization as ninit
-from arc23.model.execution import dry_run, train, validate, test, train_step, Trainer
+from arc23.__types import MetricFuncs
+from arc23.model.execution import dry_run, train, validate, test, train_step, Trainer, TrainState
 from arc23.profiling import profile_cuda_memory_by_layer
 from arc23.performance import \
     optimize_cuda_for_fixed_input_size, checkpoint_sequential, adapt_checkpointing
 from arc23.model import hooks as mh
+from arc23.model import serialization
 from arc23.__utils import on_interval
 from arc23.layers.residual import Residual
 
@@ -32,6 +35,7 @@ data_dir = '/media/guest/Main Storage/HDD Data/CMAopenaccess/preprocessed_images
 train_label_out_path = './train_labels.csv'
 validation_label_out_path = './validation_labels.csv'
 test_label_out_path = './test_labels.csv'
+train_state_path = './train_state.tar'
 
 
 # TODO: see if there's anything we can do to avoid passing device everywhere without making it global/unconfigurable
@@ -231,7 +235,7 @@ def run():
 
     # TODO: make this easier to read/abstracted out to do for train, validation, test all at once?
     # TODO: don't restrict it to just those though, or to requiring metadata
-    data_split_points = (None, 512, 256, 0)
+    data_split_points = (None, 2048, 1024, 0)
 
     train_metadata, validation_metadata, test_metadata = (
         metadata[n:m] for m, n in zip(data_split_points[:-1], data_split_points[1:])
@@ -267,7 +271,14 @@ def run():
     net = ninit.from_iterable(sh.infer_shapes(layers, loader))
     net = net.to(device)
 
-    metrics = [mt.accuracy_by_category(index_to_class[0].keys()), mt.category_accuracy()]
+    confusion_matrix_metric = mt.confusion_matrix(index_to_class[0].keys())
+    metrics = [
+        mt.accuracy_by_category(index_to_class[0].keys()),
+        MetricFuncs(
+            on_item=confusion_matrix_metric.on_item,
+            on_end=lambda: out.matrix_to_csv(lambda steps_per_epoch: confusion_matrix_metric.on_end, './out/confusion_matrix')(0)()
+        )
+    ]
 
     net = adapt_checkpointing(
         checkpoint_sequential,
@@ -286,12 +297,18 @@ def run():
     # the trainer is not used above or it would be modified
     trainer = make_trainer(net)
 
+    train_state = TrainState()
+
+    # if we have a save file, continue from there
+    if os.path.isfile(train_state_path):
+        net, trainer, train_state = serialization.load_train_state(train_state_path)(net, trainer, train_state)()
+
     accuracy = test(net, test_loader, metrics, device, squeeze_gtruth=True)
     print("pre-training accuracy: ", accuracy)
 
     callbacks = {
         "on_step": [
-            out.record_tensorboard_scalar(cb.loss(), out.tensorboard_writer()),
+            out.scalar_to_tensorboard(cb.loss(), out.tensorboard_writer()),
             lambda steps_per_epoch: on_interval(
                 out.print_with_step(
                     cb.interval_avg_loss(interval=1)
@@ -313,11 +330,12 @@ def run():
             ),
         ],
         "on_epoch_end": [
-            cb.validate(functools.partial(validate, squeeze_gtruth=True), net, validation_loader, metrics, device)
+            cb.validate(functools.partial(validate, squeeze_gtruth=True), net, validation_loader, metrics, device),
+            lambda steps_per_epoch: serialization.save_train_state(train_state_path)(net, trainer, train_state),
         ]
     }
 
-    train(net, loader, trainer, callbacks, device, 5, squeeze_gtruth=True)
+    train(net, loader, trainer, callbacks, device, train_state, 50, squeeze_gtruth=True)
 
     accuracy = test(net, test_loader, metrics, device, squeeze_gtruth=True)
     print("post-training accuracy: ", accuracy)
